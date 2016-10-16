@@ -1,16 +1,7 @@
 <resources>
     <string name="app_name">Project Oxford Emotion Samples</string>
 
-    <!-- Emotion subscription key -->
-    <!-- Please refer to https://www.projectoxford.ai/ to get your subscription key -->
-    <!-- If you have one subscription key, you can add it here to use the service -->
-    <string name="subscription_key">Please_add_the_emotion_subscription_key_here</string>
-
-    <!-- Face subscription key -->
-    <!-- Please refer to http://oxford-portal.azurewebsites.net/doc/general/subscription-key-mgmt to get your subscription key -->
-    <!-- Please note that the Emotion API and Face API have different subscription keys -->
-    <!-- You will need Face subscription key, besides the Emotion subscription keys, for the second part of the sample to work -->
-    <string name="faceSubscription_key">Please_add_the_face_subscription_key_here</string>
+    <!--See build.gradle for api key strings-->
 
     <!-- Display strings -->
     <string name="add_subscription_key_tip_title">Subscription Key is Needed</string>

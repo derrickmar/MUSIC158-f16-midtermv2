@@ -47,24 +47,27 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.ImageView;
+import android.widget.TextView;
 
 import com.google.gson.Gson;
+import com.illposed.osc.OSCMessage;
+import com.illposed.osc.OSCPortOut;
 import com.microsoft.projectoxford.emotion.EmotionServiceClient;
 import com.microsoft.projectoxford.emotion.EmotionServiceRestClient;
-import com.microsoft.projectoxford.emotion.contract.FaceRectangle;
 import com.microsoft.projectoxford.emotion.contract.RecognizeResult;
 import com.microsoft.projectoxford.emotion.rest.EmotionServiceException;
 import com.microsoft.projectoxford.emotionsample.helper.ImageHelper;
 
-import com.microsoft.projectoxford.face.FaceServiceRestClient;
-import com.microsoft.projectoxford.face.contract.Face;
-
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.util.Arrays;
 import java.util.List;
+
+import static com.microsoft.projectoxford.emotionsample.R.id.result;
 
 public class RecognizeActivity extends ActionBarActivity {
 
@@ -81,9 +84,73 @@ public class RecognizeActivity extends ActionBarActivity {
     private Bitmap mBitmap;
 
     // The edit to show status and result.
-    private EditText mEditText;
+    private TextView mTextViewResults;
 
     private EmotionServiceClient client;
+
+
+    // OSC Variables
+    private String myIP = "192.168.1.173";
+    private int myPort = 7400;
+
+    // This is used to send messages
+    private OSCPortOut oscPortOut;
+    // Successful detection of emotion for an image
+    private int successfulRequests = 0;
+    private int oscMessagesSent = 0;
+    private List<RecognizeResult> mRecognizeResult;
+
+    // This thread will contain all the code that pertains to OSC
+    private Thread oscThread = new Thread() {
+        @Override
+        public void run() {
+            Log.d("MESSAGE", "running thread??");
+
+            try {
+                // Connect to some IP address and port
+                oscPortOut = new OSCPortOut(InetAddress.getByName(myIP), myPort);
+            } catch(UnknownHostException e) {
+                // Error handling when your IP isn't found
+                return;
+            } catch(Exception e) {
+                // Error handling for any other errors
+                return;
+            }
+
+            while (true) {
+                if (oscPortOut != null && successfulRequests != oscMessagesSent) {
+                    oscMessagesSent += 1;
+
+                    Object args[] = new Object[2];
+                    RecognizeResult r = mRecognizeResult.get(0);
+                    if (r.scores.happiness > r.scores.sadness) {
+                        args[0] = 0;
+                    } else {
+                        args[0] = 1;
+                    }
+
+
+                    OSCMessage message = new OSCMessage("/emotion", Arrays.asList(args));
+
+
+                    try {
+                        // Send the messages
+                        oscPortOut.send(message);
+                    } catch (Exception e) {
+                        Log.e("ERROR: oscPortOut.send", e.toString());
+                        // Error handling for some error
+                    }
+                }
+
+                try {
+                    sleep(1000);
+                } catch (Exception e) {
+                    Log.e("ERROR: sleep", e.toString());
+                }
+            }
+        }
+    };
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -95,7 +162,7 @@ public class RecognizeActivity extends ActionBarActivity {
         }
 
         mButtonSelectImage = (Button) findViewById(R.id.buttonSelectImage);
-        mEditText = (EditText) findViewById(R.id.editTextResult);
+        mTextViewResults = (TextView) findViewById(result);
     }
 
     @Override
@@ -121,31 +188,20 @@ public class RecognizeActivity extends ActionBarActivity {
     }
 
     public void doRecognize() {
+        mTextViewResults.setText("Processing request...");
         mButtonSelectImage.setEnabled(false);
 
         // Do emotion detection using auto-detected faces.
         try {
-            new doRequest(false).execute();
+            new doRequest().execute();
         } catch (Exception e) {
-            mEditText.append("Error encountered. Exception is: " + e.toString());
-        }
-
-        String faceSubscriptionKey = getString(R.string.faceSubscription_key);
-        if (faceSubscriptionKey.equalsIgnoreCase("Please_add_the_face_subscription_key_here")) {
-            mEditText.append("\n\nThere is no face subscription key in res/values/strings.xml. Skip the sample for detecting emotions using face rectangles\n");
-        } else {
-            // Do emotion detection using face rectangles provided by Face API.
-            try {
-                new doRequest(true).execute();
-            } catch (Exception e) {
-                mEditText.append("Error encountered. Exception is: " + e.toString());
-            }
+            mTextViewResults.append("Error encountered. Exception is: " + e.toString());
         }
     }
 
     // Called when the "Select Image" button is clicked.
     public void selectImage(View view) {
-        mEditText.setText("");
+        mTextViewResults.setText("");
 
         Intent intent;
         intent = new Intent(RecognizeActivity.this, com.microsoft.projectoxford.emotionsample.helper.SelectImageActivity.class);
@@ -214,77 +270,16 @@ public class RecognizeActivity extends ActionBarActivity {
         return result;
     }
 
-    private List<RecognizeResult> processWithFaceRectangles() throws EmotionServiceException, com.microsoft.projectoxford.face.rest.ClientException, IOException {
-        Log.d("emotion", "Do emotion detection with known face rectangles");
-        Gson gson = new Gson();
-
-        // Put the image into an input stream for detection.
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        mBitmap.compress(Bitmap.CompressFormat.JPEG, 100, output);
-        ByteArrayInputStream inputStream = new ByteArrayInputStream(output.toByteArray());
-
-        long timeMark = System.currentTimeMillis();
-        Log.d("emotion", "Start face detection using Face API");
-        FaceRectangle[] faceRectangles = null;
-        String faceSubscriptionKey = getString(R.string.faceSubscription_key);
-        FaceServiceRestClient faceClient = new FaceServiceRestClient(faceSubscriptionKey);
-        Face faces[] = faceClient.detect(inputStream, false, false, null);
-        Log.d("emotion", String.format("Face detection is done. Elapsed time: %d ms", (System.currentTimeMillis() - timeMark)));
-
-        if (faces != null) {
-            faceRectangles = new FaceRectangle[faces.length];
-
-            for (int i = 0; i < faceRectangles.length; i++) {
-                // Face API and Emotion API have different FaceRectangle definition. Do the conversion.
-                com.microsoft.projectoxford.face.contract.FaceRectangle rect = faces[i].faceRectangle;
-                faceRectangles[i] = new com.microsoft.projectoxford.emotion.contract.FaceRectangle(rect.left, rect.top, rect.width, rect.height);
-            }
-        }
-
-        List<RecognizeResult> result = null;
-        if (faceRectangles != null) {
-            inputStream.reset();
-
-            timeMark = System.currentTimeMillis();
-            Log.d("emotion", "Start emotion detection using Emotion API");
-            // -----------------------------------------------------------------------
-            // KEY SAMPLE CODE STARTS HERE
-            // -----------------------------------------------------------------------
-            result = this.client.recognizeImage(inputStream, faceRectangles);
-
-            String json = gson.toJson(result);
-            Log.d("result", json);
-            // -----------------------------------------------------------------------
-            // KEY SAMPLE CODE ENDS HERE
-            // -----------------------------------------------------------------------
-            Log.d("emotion", String.format("Emotion detection is done. Elapsed time: %d ms", (System.currentTimeMillis() - timeMark)));
-        }
-        return result;
-    }
-
     private class doRequest extends AsyncTask<String, String, List<RecognizeResult>> {
         // Store error message
         private Exception e = null;
-        private boolean useFaceRectangles = false;
-
-        public doRequest(boolean useFaceRectangles) {
-            this.useFaceRectangles = useFaceRectangles;
-        }
 
         @Override
         protected List<RecognizeResult> doInBackground(String... args) {
-            if (this.useFaceRectangles == false) {
-                try {
-                    return processWithAutoFaceDetection();
-                } catch (Exception e) {
-                    this.e = e;    // Store error
-                }
-            } else {
-                try {
-                    return processWithFaceRectangles();
-                } catch (Exception e) {
-                    this.e = e;    // Store error
-                }
+            try {
+                return processWithAutoFaceDetection();
+            } catch (Exception e) {
+                this.e = e;    // Store error
             }
             return null;
         }
@@ -294,19 +289,18 @@ public class RecognizeActivity extends ActionBarActivity {
             super.onPostExecute(result);
             // Display based on error existence
 
-            if (this.useFaceRectangles == false) {
-                mEditText.append("\n\nRecognizing emotions with auto-detected face rectangles...\n");
-            } else {
-                mEditText.append("\n\nRecognizing emotions with existing face rectangles from Face API...\n");
-            }
+            mRecognizeResult = result;
+
+            mTextViewResults.append("\n\nRecognizing emotions with auto-detected face rectangles...\n");
             if (e != null) {
-                mEditText.setText("Error: " + e.getMessage());
+                mTextViewResults.setText("Error: " + e.getMessage());
                 this.e = null;
             } else {
                 if (result.size() == 0) {
-                    mEditText.append("No emotion detected :(");
+                    mTextViewResults.append("No emotion detected :(");
                 } else {
-                    Integer count = 0;
+                    Integer count = 0; // count of how many faces detected
+
                     // Covert bitmap to a mutable bitmap by copying it
                     Bitmap bitmapCopy = mBitmap.copy(Bitmap.Config.ARGB_8888, true);
                     Canvas faceCanvas = new Canvas(bitmapCopy);
@@ -317,16 +311,16 @@ public class RecognizeActivity extends ActionBarActivity {
                     paint.setColor(Color.RED);
 
                     for (RecognizeResult r : result) {
-                        mEditText.append(String.format("\nFace #%1$d \n", count));
-                        mEditText.append(String.format("\t anger: %1$.5f\n", r.scores.anger));
-                        mEditText.append(String.format("\t contempt: %1$.5f\n", r.scores.contempt));
-                        mEditText.append(String.format("\t disgust: %1$.5f\n", r.scores.disgust));
-                        mEditText.append(String.format("\t fear: %1$.5f\n", r.scores.fear));
-                        mEditText.append(String.format("\t happiness: %1$.5f\n", r.scores.happiness));
-                        mEditText.append(String.format("\t neutral: %1$.5f\n", r.scores.neutral));
-                        mEditText.append(String.format("\t sadness: %1$.5f\n", r.scores.sadness));
-                        mEditText.append(String.format("\t surprise: %1$.5f\n", r.scores.surprise));
-                        mEditText.append(String.format("\t face rectangle: %d, %d, %d, %d", r.faceRectangle.left, r.faceRectangle.top, r.faceRectangle.width, r.faceRectangle.height));
+                        mTextViewResults.append(String.format("\nFace #%1$d \n", count));
+                        mTextViewResults.append(String.format("\t anger: %1$.5f\n", r.scores.anger));
+                        mTextViewResults.append(String.format("\t contempt: %1$.5f\n", r.scores.contempt));
+                        mTextViewResults.append(String.format("\t disgust: %1$.5f\n", r.scores.disgust));
+                        mTextViewResults.append(String.format("\t fear: %1$.5f\n", r.scores.fear));
+                        mTextViewResults.append(String.format("\t happiness: %1$.5f\n", r.scores.happiness));
+                        mTextViewResults.append(String.format("\t neutral: %1$.5f\n", r.scores.neutral));
+                        mTextViewResults.append(String.format("\t sadness: %1$.5f\n", r.scores.sadness));
+                        mTextViewResults.append(String.format("\t surprise: %1$.5f\n", r.scores.surprise));
+                        mTextViewResults.append(String.format("\t face rectangle: %d, %d, %d, %d", r.faceRectangle.left, r.faceRectangle.top, r.faceRectangle.width, r.faceRectangle.height));
                         faceCanvas.drawRect(r.faceRectangle.left,
                                 r.faceRectangle.top,
                                 r.faceRectangle.left + r.faceRectangle.width,
@@ -334,10 +328,18 @@ public class RecognizeActivity extends ActionBarActivity {
                                 paint);
                         count++;
                     }
+
+                    successfulRequests += 1;
                     ImageView imageView = (ImageView) findViewById(R.id.selectedImage);
                     imageView.setImageDrawable(new BitmapDrawable(getResources(), mBitmap));
                 }
-                mEditText.setSelection(0);
+
+
+
+                // start the oscThread
+                if (!oscThread.isAlive()){
+                    oscThread.start();
+                }
             }
 
             mButtonSelectImage.setEnabled(true);
