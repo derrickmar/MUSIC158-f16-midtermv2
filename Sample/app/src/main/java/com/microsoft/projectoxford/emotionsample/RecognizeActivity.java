@@ -34,9 +34,7 @@ package com.microsoft.projectoxford.emotionsample;
 
 import android.content.Intent;
 import android.graphics.Bitmap;
-import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Paint;
 import android.graphics.drawable.BitmapDrawable;
 import android.net.Uri;
 import android.os.AsyncTask;
@@ -51,6 +49,7 @@ import android.widget.ImageView;
 import android.widget.TextView;
 
 import com.google.gson.Gson;
+import com.illposed.osc.OSCBundle;
 import com.illposed.osc.OSCMessage;
 import com.illposed.osc.OSCPortOut;
 import com.microsoft.projectoxford.emotion.EmotionServiceClient;
@@ -66,6 +65,7 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Random;
 
 import static com.microsoft.projectoxford.emotionsample.R.id.result;
 
@@ -73,6 +73,7 @@ public class RecognizeActivity extends ActionBarActivity {
 
     // Flag to indicate which task is to be performed.
     private static final int REQUEST_SELECT_IMAGE = 0;
+    private static final int SOUND_SEQ_LENGTH = 14;
 
     // The button to select an image
     private Button mButtonSelectImage;
@@ -89,7 +90,9 @@ public class RecognizeActivity extends ActionBarActivity {
     private EmotionServiceClient client;
 
 
+
     // OSC Variables
+    // INSTRUCTOR NOTE: Change this to your local IP
     private String myIP = "192.168.1.173";
     private int myPort = 7400;
 
@@ -121,21 +124,37 @@ public class RecognizeActivity extends ActionBarActivity {
                 if (oscPortOut != null && successfulRequests != oscMessagesSent) {
                     oscMessagesSent += 1;
 
-                    Object args[] = new Object[2];
+                    Object emotion[] = new Object[1];
+
                     RecognizeResult r = mRecognizeResult.get(0);
-                    if (r.scores.happiness > r.scores.sadness) {
-                        args[0] = 0;
+                    if (r.scores.happiness > r.scores.sadness + r.scores.neutral) {
+                        emotion[0] = 1;
                     } else {
-                        args[0] = 1;
+                        emotion[0] = 2;
                     }
 
+                    Object soundSeq[] = new Object[SOUND_SEQ_LENGTH];
+                    Random generator = new Random();
+                    for (int i = 0; i < SOUND_SEQ_LENGTH; i+= 1) {
+                        int width_rand = generator.nextInt(mBitmap.getWidth());
+                        int height_rand = generator.nextInt(mBitmap.getHeight());
+                        int randPixel = mBitmap.getPixel(width_rand, height_rand);
+                        Integer soundIndex =
+                                (Color.red(randPixel) + Color.blue(randPixel) + Color.green(randPixel)) % 7;
+                        soundSeq[i] = soundIndex;
+                    }
 
-                    OSCMessage message = new OSCMessage("/emotion", Arrays.asList(args));
+                      OSCBundle bundle = new OSCBundle();
+                    OSCMessage message = new OSCMessage("/emotion", Arrays.asList(emotion));
+                    bundle.addPacket(message);
+
+                    OSCMessage message2 = new OSCMessage("/soundseq", Arrays.asList(soundSeq));
+                    bundle.addPacket(message2);
 
 
                     try {
                         // Send the messages
-                        oscPortOut.send(message);
+                        oscPortOut.send(bundle);
                     } catch (Exception e) {
                         Log.e("ERROR: oscPortOut.send", e.toString());
                         // Error handling for some error
@@ -250,23 +269,15 @@ public class RecognizeActivity extends ActionBarActivity {
         ByteArrayInputStream inputStream = new ByteArrayInputStream(output.toByteArray());
 
         long startTime = System.currentTimeMillis();
-        // -----------------------------------------------------------------------
-        // KEY SAMPLE CODE STARTS HERE
-        // -----------------------------------------------------------------------
 
         List<RecognizeResult> result = null;
-        //
         // Detect emotion by auto-detecting faces in the image.
-        //
         result = this.client.recognizeImage(inputStream);
 
         String json = gson.toJson(result);
         Log.d("result", json);
 
         Log.d("emotion", String.format("Detection done. Elapsed time: %d ms", (System.currentTimeMillis() - startTime)));
-        // -----------------------------------------------------------------------
-        // KEY SAMPLE CODE ENDS HERE
-        // -----------------------------------------------------------------------
         return result;
     }
 
@@ -303,12 +314,6 @@ public class RecognizeActivity extends ActionBarActivity {
 
                     // Covert bitmap to a mutable bitmap by copying it
                     Bitmap bitmapCopy = mBitmap.copy(Bitmap.Config.ARGB_8888, true);
-                    Canvas faceCanvas = new Canvas(bitmapCopy);
-                    faceCanvas.drawBitmap(mBitmap, 0, 0, null);
-                    Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-                    paint.setStyle(Paint.Style.STROKE);
-                    paint.setStrokeWidth(5);
-                    paint.setColor(Color.RED);
 
                     for (RecognizeResult r : result) {
                         mTextViewResults.append(String.format("\nFace #%1$d \n", count));
@@ -321,11 +326,6 @@ public class RecognizeActivity extends ActionBarActivity {
                         mTextViewResults.append(String.format("\t sadness: %1$.5f\n", r.scores.sadness));
                         mTextViewResults.append(String.format("\t surprise: %1$.5f\n", r.scores.surprise));
                         mTextViewResults.append(String.format("\t face rectangle: %d, %d, %d, %d", r.faceRectangle.left, r.faceRectangle.top, r.faceRectangle.width, r.faceRectangle.height));
-                        faceCanvas.drawRect(r.faceRectangle.left,
-                                r.faceRectangle.top,
-                                r.faceRectangle.left + r.faceRectangle.width,
-                                r.faceRectangle.top + r.faceRectangle.height,
-                                paint);
                         count++;
                     }
 
